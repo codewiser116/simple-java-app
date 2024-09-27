@@ -14,7 +14,7 @@ public class CodewiseApplication {
         SpringApplication.run(CodewiseApplication.class, args);
 
         logger.info("Starting the application!!");
-        logger.info("Thank you!");
+        logger.info("Thank you so much!");
 
     }
 }

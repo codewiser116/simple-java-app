@@ -3,7 +3,7 @@ pipeline {
     stages {
         stage("Clone the project") {
             steps {
-                git branch: 'main', url: 'https://github.com/codewiser116/simple-java-app.git'
+                git branch: 'benas_branch', url: 'https://github.com/codewiser116/simple-java-app.git'
             }
         }
 
