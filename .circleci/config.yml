@@ -1,0 +1,119 @@
+version: 2.1
+
+parameters:
+  app_name:
+    type: string
+    default: "circle_ci_example"
+
+jobs:
+  build-docker-image:
+    docker:
+      - image: cimg/base:stable
+    resource_class: large
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: "Build docker image"
+          command: |
+            docker build -t << pipeline.parameters.app_name >>:latest .
+      - run:
+          name: "Compress docker image"
+          command: |
+            docker save << pipeline.parameters.app_name >>:latest | gzip > << pipeline.parameters.app_name >>.tar.gz
+      - persist_to_workspace:
+          root: .
+          paths:
+            - << pipeline.parameters.app_name >>.tar.gz
+  deploy-compose:
+    parameters:
+      host:
+        type: string
+        default: ""
+      ssh:
+        type: string
+        default: ""
+      compose_file:
+        type: string
+        default: ""
+    docker:
+      - image: cimg/base:stable
+    resource_class: large
+    steps:
+      - checkout
+      - setup_remote_docker
+      - attach_workspace:
+          at: .
+      - run:
+          name: Setup SSH
+          command: |
+            echo << parameters.ssh >> | base64 --decode > ssh.pem
+            chmod 400 ssh.pem
+      - run:
+          name: Install docker using snapd if not exists
+          command: |
+            ssh -o "StrictHostKeyChecking=no" -i ./ssh.pem ubuntu@<< parameters.host >> '
+            if ! [ -x "$(command -v docker)" ]; then
+              sudo snap install docker
+            fi'
+      - run:
+          name: If COMPOSE_FILE exists then sed it
+          command: |
+            if [ -f "<< parameters.compose_file >>" ]; then
+              sed -i 's@#IMAGE@<< pipeline.parameters.app_name >>:latest@g' << parameters.compose_file >>
+            fi
+      - run:
+          name: Stop and remove containers
+          command: |
+            ssh -o "StrictHostKeyChecking=no" -i ./ssh.pem ubuntu@<< parameters.host >> '
+            if [ -f "<< parameters.compose_file >>" ]; then
+              sudo docker compose -f << parameters.compose_file >> down --rmi all
+            fi'
+      - run:
+          name: Copy files to server
+          command: |
+            scp -o "StrictHostKeyChecking=no" -i ./ssh.pem << pipeline.parameters.app_name >>.tar.gz << parameters.compose_file >> ubuntu@<< parameters.host >>:~/
+      - run:
+          name: Load docker image and remove tar.gz
+          command: |
+            ssh -o "StrictHostKeyChecking=no" -i ./ssh.pem ubuntu@<< parameters.host >> '
+            sudo docker load -i << pipeline.parameters.app_name >>.tar.gz
+            sudo rm << pipeline.parameters.app_name >>.tar.gz
+            '
+      - run:
+          name: Start containers
+          command: |
+            ssh -o "StrictHostKeyChecking=no" -i ./ssh.pem ubuntu@<< parameters.host >> '
+            sudo docker compose -f << parameters.compose_file >> up -d'
+
+workflows:
+  deploy-to-dev:
+    jobs:
+      - build-docker-image:
+          filters:
+            branches:
+              only: development
+      - deploy-compose:
+          host: $DEV_IP
+          ssh: $DEV_SSH
+          compose_file: "docker-compose.yml"
+          filters:
+            branches:
+              only: development
+          requires:
+            - build-docker-image
+  deploy-to-prod:
+    jobs:
+      - build-docker-image:
+          filters:
+            branches:
+              only: production
+      - deploy-compose:
+          host: $PROD_IP
+          ssh: $PROD_SSH
+          compose_file: "docker-compose.yml"
+          filters:
+            branches:
+              only: production
+          requires:
+            - build-docker-image
